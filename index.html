@@ -703,20 +703,6 @@ async function webmToMp4(webmBlob, onProgress) {
     const durations = sources.map(s => s.el.duration || 2.5);
     const exportDurationMs = Math.max(...durations) * 1000;
 
-    const canvasStream = canvas.captureStream(30);
-    let recorder;
-    try {
-      recorder = new MediaRecorder(canvasStream, { mimeType: pickSupportedMimeType() });
-    } catch (e) {
-      recorder = new MediaRecorder(canvasStream);
-    }
-    const chunks = [];
-    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-
-    const recordingDone = new Promise(resolve => {
-      recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'video/webm' }));
-    });
-
     let rafId;
     function drawFrame() {
       ctx.fillStyle = '#fffdf7';
@@ -736,17 +722,53 @@ async function webmToMp4(webmBlob, onProgress) {
       rafId = requestAnimationFrame(drawFrame);
     }
 
+    // Paint a real frame onto the canvas BEFORE starting captureStream/
+    // MediaRecorder. Starting the recorder on a still-blank canvas (then
+    // drawing the first real content a moment later) is a known cause of
+    // malformed/truncated webm headers — the EBML header can end up
+    // describing zero-content frames if recording begins before any
+    // pixels exist. Drawing first, then capturing the now-live canvas,
+    // avoids that race entirely.
+    ctx.fillStyle = '#fffdf7';
+    ctx.fillRect(0, 0, totalW, totalH);
+    let y0 = padding;
+    sources.forEach(s => {
+      ctx.save();
+      ctx.translate(padding + slotW, y0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(s.el, 0, 0, slotW, slotH);
+      ctx.restore();
+      y0 += slotH + padding;
+    });
+
+    const canvasStream = canvas.captureStream(30);
+    let recorder;
+    try {
+      recorder = new MediaRecorder(canvasStream, { mimeType: pickSupportedMimeType() });
+    } catch (e) {
+      recorder = new MediaRecorder(canvasStream);
+    }
+    const chunks = [];
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+    const recordingDone = new Promise(resolve => {
+      recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'video/webm' }));
+    });
+
     // same timeslicing fix as the single-clip recorder: requesting data
     // periodically (every 200ms) instead of relying on a single
     // dataavailable event at the very end avoids producing a malformed
     // / incomplete webm container on some browsers.
     recorder.start(200);
-    drawFrame();
+    rafId = requestAnimationFrame(drawFrame);
 
     await new Promise(res => setTimeout(res, exportDurationMs));
 
     cancelAnimationFrame(rafId);
-    if (recorder.state !== 'inactive') recorder.stop();
+    if (recorder.state !== 'inactive') {
+      recorder.requestData(); // flush any pending data before stopping
+      recorder.stop();
+    }
 
     const blob = await recordingDone;
 
