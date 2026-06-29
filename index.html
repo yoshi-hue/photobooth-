@@ -315,9 +315,16 @@ function getFFmpeg(onProgress) {
       ffmpeg.on('log', ({ message }) => onProgress(message));
     }
     const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+    const ffmpegPkgBaseURL = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm';
     await ffmpeg.load({
       coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm')
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      // the @ffmpeg/ffmpeg package itself also spins up a Worker pointing
+      // at its own unpkg URL — browsers block constructing a Worker from
+      // a different origin than the page, even with CORS headers present.
+      // Blob-ifying this worker script the same way as the core files
+      // fixes the "Failed to construct 'Worker'" SecurityError.
+      classWorkerURL: await toBlobURL(`${ffmpegPkgBaseURL}/worker.js`, 'text/javascript')
     });
     ffmpegInstance = ffmpeg;
     return ffmpeg;
@@ -699,7 +706,7 @@ async function webmToMp4(webmBlob, onProgress) {
     const canvasStream = canvas.captureStream(30);
     let recorder;
     try {
-      recorder = new MediaRecorder(canvasStream, { mimeType: 'video/webm' });
+      recorder = new MediaRecorder(canvasStream, { mimeType: pickSupportedMimeType() });
     } catch (e) {
       recorder = new MediaRecorder(canvasStream);
     }
@@ -707,7 +714,7 @@ async function webmToMp4(webmBlob, onProgress) {
     recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
     const recordingDone = new Promise(resolve => {
-      recorder.onstop = () => resolve(new Blob(chunks, { type: 'video/webm' }));
+      recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'video/webm' }));
     });
 
     let rafId;
@@ -729,13 +736,17 @@ async function webmToMp4(webmBlob, onProgress) {
       rafId = requestAnimationFrame(drawFrame);
     }
 
-    recorder.start();
+    // same timeslicing fix as the single-clip recorder: requesting data
+    // periodically (every 200ms) instead of relying on a single
+    // dataavailable event at the very end avoids producing a malformed
+    // / incomplete webm container on some browsers.
+    recorder.start(200);
     drawFrame();
 
     await new Promise(res => setTimeout(res, exportDurationMs));
 
     cancelAnimationFrame(rafId);
-    recorder.stop();
+    if (recorder.state !== 'inactive') recorder.stop();
 
     const blob = await recordingDone;
 
