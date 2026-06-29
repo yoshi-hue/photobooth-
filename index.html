@@ -241,14 +241,6 @@
     letter-spacing: 0.5px;
   }
 </style>
-<script type="importmap">
-{
-  "imports": {
-    "@ffmpeg/ffmpeg": "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js",
-    "@ffmpeg/util": "https://unpkg.com/@ffmpeg/util@0.12.1/dist/esm/index.js"
-  }
-}
-</script>
 </head>
 <body>
 
@@ -291,68 +283,11 @@
   </div>
 
   <div class="hint">
-    pick a strip length (2/3/4), choose photo or video mode, then hit "start strip" — the booth will count down and fill each slot automatically. video shots loop live right in the frame. saving exports photos as one flattened strip PNG, and video clips as one combined strip-shaped .mp4 video (plays everywhere — phone, desktop, anywhere). the first video save loads a converter and takes longer; after that it's faster.
+    pick a strip length (2/3/4), choose photo or video mode, then hit "start strip" — the booth will count down and fill each slot automatically. video shots loop live right in the frame. saving exports photos as one flattened strip PNG, and video clips as one combined strip-shaped .webm video. on desktop, open .webm files in Chrome/Firefox/VLC rather than the default Windows/Mac player for best results.
   </div>
 </div>
 
-<script type="module">
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { toBlobURL, fetchFile } from '@ffmpeg/util';
-
-let ffmpegInstance = null;
-let ffmpegLoadingPromise = null;
-
-// Loads ffmpeg.wasm lazily — only when a video strip is actually saved,
-// since the core is a multi-MB download and there's no reason to pay
-// that cost for a photo-only strip or before the person ever hits save.
-function getFFmpeg(onProgress) {
-  if (ffmpegInstance) return Promise.resolve(ffmpegInstance);
-  if (ffmpegLoadingPromise) return ffmpegLoadingPromise;
-
-  ffmpegLoadingPromise = (async () => {
-    const ffmpeg = new FFmpeg();
-    if (onProgress) {
-      ffmpeg.on('log', ({ message }) => onProgress(message));
-    }
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
-    const ffmpegPkgBaseURL = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm';
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      // the @ffmpeg/ffmpeg package itself also spins up a Worker pointing
-      // at its own unpkg URL — browsers block constructing a Worker from
-      // a different origin than the page, even with CORS headers present.
-      // Blob-ifying this worker script the same way as the core files
-      // fixes the "Failed to construct 'Worker'" SecurityError.
-      classWorkerURL: await toBlobURL(`${ffmpegPkgBaseURL}/worker.js`, 'text/javascript')
-    });
-    ffmpegInstance = ffmpeg;
-    return ffmpeg;
-  })();
-
-  return ffmpegLoadingPromise;
-}
-
-// Transcodes a webm Blob into an mp4 Blob (H.264/AAC) entirely client-side.
-// This is a real re-encode, not a stream copy, since VP8 video inside an
-// MP4 container isn't reliably playable on iOS/Windows — H.264 is the one
-// codec virtually every phone, desktop player, and gallery app supports.
-async function webmToMp4(webmBlob, onProgress) {
-  const ffmpeg = await getFFmpeg(onProgress);
-  const inputName = 'input.webm';
-  const outputName = 'output.mp4';
-
-  await ffmpeg.writeFile(inputName, await fetchFile(webmBlob));
-  await ffmpeg.exec(['-i', inputName, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outputName]);
-  const data = await ffmpeg.readFile(outputName);
-
-  // clean up FS so repeated saves don't accumulate memory
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
-
-  return new Blob([data.buffer], { type: 'video/mp4' });
-}
-
+<script>
 (() => {
   const videoEl = document.querySelector('.live');
   const countdownEl = document.querySelector('.countdown');
@@ -809,22 +744,8 @@ async function webmToMp4(webmBlob, onProgress) {
       if (videos.length > 0) {
         progressEl.textContent = 'recording strip video…';
         const webmBlob = await exportStripVideo(videos);
-
-        try {
-          progressEl.textContent = 'loading converter…';
-          const mp4Blob = await webmToMp4(webmBlob, (msg) => {
-            progressEl.textContent = 'converting to mp4…';
-          });
-          const mp4Url = URL.createObjectURL(mp4Blob);
-          triggerDownload(mp4Url, 'photobooth-strip.mp4');
-        } catch (conversionErr) {
-          // mp4 conversion is a nice-to-have, not the core feature —
-          // if it fails for any reason, still give them the working webm
-          // rather than losing the strip entirely.
-          console.error('mp4 conversion failed, falling back to webm:', conversionErr);
-          const webmUrl = URL.createObjectURL(webmBlob);
-          triggerDownload(webmUrl, 'photobooth-strip.webm');
-        }
+        const webmUrl = URL.createObjectURL(webmBlob);
+        triggerDownload(webmUrl, 'photobooth-strip.webm');
       }
 
       progressEl.textContent = 'strip saved';
