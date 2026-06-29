@@ -307,7 +307,7 @@
 
   async function initCamera() {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: mode === 'video' });
+      stream = await navigator.mediaDevices.getUserMedia({ video: true });
       videoEl.srcObject = stream;
     } catch (err) {
       alert('Camera access was denied or unavailable. The photobooth needs camera permission to work.');
@@ -424,11 +424,16 @@
   }
 
   function pickSupportedMimeType() {
+    // VP9+Opus was confirmed via testing to encode successfully but fail
+    // to *decode* back in <video> on this browser (MediaError 4:
+    // SRC_NOT_SUPPORTED) — a known Chrome encode/decode mismatch for that
+    // combo. VP8 video-only is far more reliably both encoded AND decoded
+    // by the same browser, so it's prioritized first. No audio track is
+    // requested either, removing one more variable (and these clips are
+    // muted/looping anyway, so audio was never needed).
     const candidates = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm;codecs=vp9',
       'video/webm;codecs=vp8',
+      'video/webm;codecs=vp9',
       'video/webm'
     ];
     return candidates.find(type => MediaRecorder.isTypeSupported(type)) || 'video/webm';
