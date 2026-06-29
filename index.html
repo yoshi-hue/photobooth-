@@ -709,6 +709,7 @@
     }
 
     let blob = await recordingDone;
+    console.log('Strip recording stopped. Blob size before duration fix:', blob.size);
 
     // Chrome's MediaRecorder (via canvas.captureStream specifically) is
     // well-documented to produce webm files missing duration metadata in
@@ -716,12 +717,22 @@
     // real ffmpeg-based converters reject the file outright with parse
     // errors. ysFixWebmDuration patches that missing metadata section
     // into the blob after the fact, fixing playback everywhere.
-    if (typeof ysFixWebmDuration === 'function') {
+    if (typeof ysFixWebmDuration === 'function' && blob.size > 0) {
       try {
-        blob = await ysFixWebmDuration(blob, actualDurationMs, { logger: false });
+        const fixedBlob = await ysFixWebmDuration(blob, actualDurationMs, { logger: false });
+        console.log('Blob size after duration fix:', fixedBlob ? fixedBlob.size : 'null/undefined returned');
+        // only use the fixed blob if it's actually a valid, non-empty result —
+        // never let a broken fix silently replace a working recording with nothing
+        if (fixedBlob && fixedBlob.size > 0) {
+          blob = fixedBlob;
+        } else {
+          console.warn('ysFixWebmDuration returned empty/invalid result — keeping original recording');
+        }
       } catch (fixErr) {
-        console.error('ysFixWebmDuration failed, using unfixed blob:', fixErr);
+        console.error('ysFixWebmDuration threw an error, keeping original recording:', fixErr);
       }
+    } else if (blob.size === 0) {
+      console.error('Strip recording produced an empty blob — skipping duration fix entirely');
     } else {
       console.warn('ysFixWebmDuration not loaded — webm duration metadata may be missing');
     }
