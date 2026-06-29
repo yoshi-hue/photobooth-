@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>photobooth.exe</title>
+<style>
+  :root {
+    --booth-bg: #d8cfe0;
+    --booth-border: #2b2b2b;
+    --screen-bg: #111;
+    --accent: #e85d75;
+    --strip-bg: #fffdf7;
+    --btn-bg: #f4ecf7;
+    --btn-shadow: #2b2b2b;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: "Courier New", monospace;
+    background: var(--booth-bg);
+    display: flex;
+    justify-content: center;
+    padding: 40px 16px;
+    margin: 0;
+  }
+
+  .booth {
+    background: var(--btn-bg);
+    border: 3px solid var(--booth-border);
+    box-shadow: 6px 6px 0 var(--btn-shadow);
+    padding: 18px;
+    width: 360px;
+  }
+
+  .booth-titlebar {
+    background: var(--booth-border);
+    color: #fff;
+    font-size: 13px;
+    padding: 4px 8px;
+    margin: -18px -18px 14px -18px;
+    display: flex;
+    justify-content: space-between;
+    letter-spacing: 0.5px;
+  }
+
+  .screen {
+    position: relative;
+    background: var(--screen-bg);
+    border: 2px solid var(--booth-border);
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+  }
+
+  video.live {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1); /* mirror like a real booth */
+    display: block;
+  }
+
+  .countdown {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 64px;
+    color: #fff;
+    background: rgba(0,0,0,0.35);
+    text-shadow: 2px 2px 0 var(--accent);
+  }
+
+  .flash {
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .controls {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+    align-items: center;
+  }
+
+  .mode-toggle {
+    display: flex;
+    border: 2px solid var(--booth-border);
+    overflow: hidden;
+    font-size: 11px;
+  }
+
+  .mode-toggle button {
+    border: none;
+    background: var(--btn-bg);
+    padding: 6px 10px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+  }
+
+  .mode-toggle button.active {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .shutter {
+    flex: 1;
+    background: var(--accent);
+    color: #fff;
+    border: 2px solid var(--booth-border);
+    box-shadow: 3px 3px 0 var(--btn-shadow);
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+  }
+
+  .shutter:active {
+    box-shadow: none;
+    transform: translate(3px, 3px);
+  }
+
+  .shutter:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .strip-wrap {
+    margin-top: 18px;
+  }
+
+  .strip-label {
+    font-size: 11px;
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .strip-label button {
+    font-family: inherit;
+    font-size: 10px;
+    background: var(--btn-bg);
+    border: 1px solid var(--booth-border);
+    cursor: pointer;
+    padding: 3px 6px;
+  }
+
+  /* The filmstrip card itself: one white die-cut frame, rounded corners,
+     soft drop shadow, with each slot separated by a thin divider line —
+     matches a physical photobooth strip. */
+  .strip {
+    background: var(--strip-bg);
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+    width: fit-content;
+    margin: 0 auto;
+  }
+
+  .strip-slot {
+    position: relative;
+    width: 220px;
+    aspect-ratio: 4 / 3;
+    background: var(--screen-bg);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .strip-slot img,
+  .strip-slot video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .strip-slot.empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .strip-slot.empty::after {
+    content: attr(data-slot-label);
+    font-size: 10px;
+    color: #555;
+    letter-spacing: 0.5px;
+  }
+
+  .strip-slot .tag {
+    position: absolute;
+    bottom: 4px;
+    right: 6px;
+    font-size: 8px;
+    background: rgba(255,255,255,0.85);
+    padding: 1px 4px;
+    color: #444;
+    border-radius: 2px;
+    z-index: 2;
+  }
+
+  .strip-slot .remove {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    font-size: 10px;
+    border: none;
+    cursor: pointer;
+    line-height: 1;
+    z-index: 2;
+  }
+
+  .hint {
+    font-size: 10px;
+    color: #555;
+    margin-top: 10px;
+    line-height: 1.4;
+  }
+
+  .progress {
+    font-size: 11px;
+    color: var(--accent);
+    margin-top: 8px;
+    min-height: 14px;
+    letter-spacing: 0.5px;
+  }
+</style>
+</head>
+<body>
+
+<div class="booth">
+  <div class="booth-titlebar">
+    <span>photobooth.exe</span>
+    <span>_ □ x</span>
+  </div>
+
+  <div class="screen">
+    <video class="live" autoplay playsinline muted></video>
+    <div class="countdown"></div>
+    <div class="flash"></div>
+  </div>
+
+  <div class="controls">
+    <div class="mode-toggle">
+      <button class="mode-btn active" data-mode="photo">PHOTO</button>
+      <button class="mode-btn" data-mode="video">VIDEO</button>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="mode-toggle" id="countToggle">
+      <button class="count-btn" data-count="2">x2</button>
+      <button class="count-btn active" data-count="3">x3</button>
+      <button class="count-btn" data-count="4">x4</button>
+    </div>
+    <button class="shutter" id="shutterBtn">● start strip</button>
+  </div>
+
+  <div class="progress" id="progress"></div>
+
+  <div class="strip-wrap">
+    <div class="strip-label">
+      <span>your strip</span>
+      <button id="downloadBtn">save strip ↓</button>
+    </div>
+    <div class="strip" id="strip"></div>
+  </div>
+
+  <div class="hint">
+    pick a strip length (2/3/4), choose photo or video mode, then hit "start strip" — the booth will count down and fill each slot automatically. video shots loop live right in the frame. saving exports photos as one flattened strip PNG, and video clips as one combined strip-shaped .webm video — clips take a few seconds to save since they record in real time.
+  </div>
+</div>
+
+<script>
+(() => {
+  const videoEl = document.querySelector('.live');
+  const countdownEl = document.querySelector('.countdown');
+  const flashEl = document.querySelector('.flash');
+  const shutterBtn = document.getElementById('shutterBtn');
+  const stripEl = document.getElementById('strip');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const modeBtns = document.querySelectorAll('.mode-btn');
+  const countBtns = document.querySelectorAll('.count-btn');
+  const progressEl = document.getElementById('progress');
+
+  let mode = 'photo';
+  let stripLength = 3;
+  let stream = null;
+  let mediaRecorder = null;
+  let captures = []; // { index, type: 'photo'|'video', dataUrl or url }
+
+  async function initCamera() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: mode === 'video' });
+      videoEl.srcObject = stream;
+    } catch (err) {
+      alert('Camera access was denied or unavailable. The photobooth needs camera permission to work.');
+      console.error(err);
+    }
+  }
+
+  async function restartStreamForMode() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+    await initCamera();
+  }
+
+  modeBtns.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      modeBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      mode = btn.dataset.mode;
+      await restartStreamForMode();
+    });
+  });
+
+  function doFlash() {
+    flashEl.style.transition = 'none';
+    flashEl.style.opacity = '0.9';
+    requestAnimationFrame(() => {
+      flashEl.style.transition = 'opacity 250ms ease';
+      flashEl.style.opacity = '0';
+    });
+  }
+
+  function runCountdown(seconds) {
+    return new Promise(resolve => {
+      countdownEl.style.display = 'flex';
+      let n = seconds;
+      countdownEl.textContent = n;
+      const interval = setInterval(() => {
+        n -= 1;
+        if (n <= 0) {
+          clearInterval(interval);
+          countdownEl.style.display = 'none';
+          resolve();
+        } else {
+          countdownEl.textContent = n;
+        }
+      }, 700);
+    });
+  }
+
+  // Renders `stripLength` empty slots in the strip frame upfront, like the
+  // physical filmstrip in the reference image. Each capture fills the next
+  // empty slot in order rather than being prepended as a separate card.
+  function renderEmptySlots() {
+    stripEl.innerHTML = '';
+    for (let i = 0; i < stripLength; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'strip-slot empty';
+      slot.dataset.index = i;
+      slot.dataset.slotLabel = `${i + 1}`;
+      stripEl.appendChild(slot);
+    }
+  }
+
+  function fillSlot(index, node, type) {
+    const slot = stripEl.querySelector(`.strip-slot[data-index="${index}"]`);
+    if (!slot) return;
+    slot.classList.remove('empty');
+    slot.innerHTML = '';
+
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = type === 'video' ? 'clip' : 'photo';
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove';
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => {
+      slot.innerHTML = '';
+      slot.classList.add('empty');
+      captures = captures.filter(c => c.index !== index);
+    });
+
+    slot.appendChild(node);
+    slot.appendChild(tag);
+    slot.appendChild(removeBtn);
+  }
+
+  countBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      countBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      stripLength = parseInt(btn.dataset.count, 10);
+      captures = [];
+      renderEmptySlots();
+    });
+  });
+
+  function takePhoto(slotIndex) {
+    const canvas = document.createElement('canvas');
+    canvas.width = videoEl.videoWidth;
+    canvas.height = videoEl.videoHeight;
+    const ctx = canvas.getContext('2d');
+    // mirror to match the preview
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/png');
+
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    fillSlot(slotIndex, img, 'photo');
+    captures.push({ index: slotIndex, type: 'photo', dataUrl });
+  }
+
+  function pickSupportedMimeType() {
+    const candidates = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm'
+    ];
+    return candidates.find(type => MediaRecorder.isTypeSupported(type)) || 'video/webm';
+  }
+
+  // Converts a Blob into a base64 data URL. This sandbox's Content
+  // Security Policy blocks `blob:` URLs in <video>/<audio> src (even
+  // though media-src allows '*', blob: must be explicitly allowed and
+  // isn't here) — so recorded clips must travel as data: URLs instead.
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function recordClip(durationMs = 2500) {
+    return new Promise((resolve, reject) => {
+      if (!stream) return reject('no stream');
+      let chunks = [];
+      const mimeType = pickSupportedMimeType();
+      try {
+        mediaRecorder = new MediaRecorder(stream, { mimeType });
+      } catch (e) {
+        mediaRecorder = new MediaRecorder(stream);
+      }
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: mimeType });
+        try {
+          const dataUrl = await blobToDataUrl(blob);
+          resolve({ url: dataUrl, blob });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      mediaRecorder.start();
+      setTimeout(() => mediaRecorder.stop(), durationMs);
+    });
+  }
+
+  function captureVideo(slotIndex) {
+    return recordClip(2500).then(({ url }) => {
+      const vid = document.createElement('video');
+      vid.autoplay = true;
+      vid.loop = true;
+      vid.muted = true;
+      vid.playsInline = true;
+      vid.setAttribute('muted', ''); // some mobile browsers need the attribute, not just the property
+      vid.style.transform = 'scaleX(-1)'; // mirror to match the live preview
+      vid.src = url;
+      vid.load();
+      // explicitly kick off playback once enough data is available —
+      // relying on the autoplay attribute alone can silently fail to
+      // paint a visible frame on some devices, leaving a black box.
+      vid.addEventListener('loadeddata', () => {
+        vid.play().catch(() => {});
+      });
+      fillSlot(slotIndex, vid, 'video');
+      captures.push({ index: slotIndex, type: 'video', url });
+    });
+  }
+
+  function setControlsDisabled(disabled) {
+    shutterBtn.disabled = disabled;
+    modeBtns.forEach(b => b.disabled = disabled);
+    countBtns.forEach(b => b.disabled = disabled);
+  }
+
+  async function runStripSequence() {
+    setControlsDisabled(true);
+    captures = [];
+    renderEmptySlots();
+    const total = stripLength;
+
+    for (let i = 0; i < total; i++) {
+      progressEl.textContent = `shot ${i + 1} of ${total}…`;
+      await runCountdown(3);
+      doFlash();
+
+      if (mode === 'photo') {
+        takePhoto(i);
+      } else {
+        shutterBtn.textContent = '● recording…';
+        progressEl.textContent = `shot ${i + 1} of ${total} — recording…`;
+        await captureVideo(i);
+        shutterBtn.textContent = '● start strip';
+      }
+
+      // brief pause between shots so the flash/transition settles
+      if (i < total - 1) await new Promise(res => setTimeout(res, 500));
+    }
+
+    progressEl.textContent = `strip complete — ${total} shots`;
+    setControlsDisabled(false);
+  }
+
+  shutterBtn.addEventListener('click', runStripSequence);
+
+  // --- Download / save ---
+  // PHOTO captures are flattened into one strip PNG, like a real printed strip.
+  // VIDEO captures are composited live onto a canvas (each clip looping in its
+  // slot) while MediaRecorder captures that canvas as one combined strip video.
+  // A mixed strip downloads both: one PNG for the photos, one webm for the clips.
+  async function buildStripImage(photoCaptures) {
+    const imgs = await Promise.all(photoCaptures.map(c => new Promise(res => {
+      const img = new Image();
+      img.onload = () => res(img);
+      img.src = c.dataUrl;
+    })));
+
+    const padding = 14;
+    const w = Math.max(...imgs.map(i => i.width));
+    const h = imgs.reduce((sum, i) => sum + i.height + padding, padding);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w + padding * 2;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fffdf7';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    let y = padding;
+    imgs.forEach(img => {
+      ctx.drawImage(img, padding, y, w, img.height);
+      y += img.height + padding;
+    });
+
+    return canvas.toDataURL('image/png');
+  }
+
+  function buildPlaybackSources(videoCaptures) {
+    // Build ready-to-play <video> sources for each clip — muted, looping,
+    // attached off-screen (but in the DOM) so autoplay reliably works.
+    return Promise.all(videoCaptures.map(c => new Promise((resolve, reject) => {
+      const vid = document.createElement('video');
+      vid.muted = true;
+      vid.setAttribute('muted', '');
+      vid.loop = true;
+      vid.playsInline = true;
+      vid.style.position = 'fixed';
+      vid.style.left = '-9999px'; // off-screen but still in the DOM
+      document.body.appendChild(vid);
+      vid.addEventListener('loadeddata', () => {
+        vid.play().then(() => resolve({ ...c, el: vid })).catch(reject);
+      });
+      vid.addEventListener('error', reject);
+      vid.src = c.url;
+      vid.load();
+    })));
+  }
+
+  async function exportStripVideo(videoCaptures) {
+    const sources = await buildPlaybackSources(videoCaptures);
+
+    const slotW = 220;
+    const padding = 14;
+    const slotH = Math.round(slotW * 3 / 4); // matches the 4:3 slot aspect ratio
+    const totalW = slotW + padding * 2;
+    const totalH = sources.length * slotH + (sources.length + 1) * padding;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = totalW;
+    canvas.height = totalH;
+    const ctx = canvas.getContext('2d');
+
+    // duration: longest clip in the strip
+    const durations = sources.map(s => s.el.duration || 2.5);
+    const exportDurationMs = Math.max(...durations) * 1000;
+
+    const canvasStream = canvas.captureStream(30);
+    let recorder;
+    try {
+      recorder = new MediaRecorder(canvasStream, { mimeType: 'video/webm' });
+    } catch (e) {
+      recorder = new MediaRecorder(canvasStream);
+    }
+    const chunks = [];
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+    const recordingDone = new Promise(resolve => {
+      recorder.onstop = () => resolve(new Blob(chunks, { type: 'video/webm' }));
+    });
+
+    let rafId;
+    function drawFrame() {
+      ctx.fillStyle = '#fffdf7';
+      ctx.fillRect(0, 0, totalW, totalH);
+
+      let y = padding;
+      sources.forEach(s => {
+        // raw clip is un-mirrored camera footage — mirror it here to match the live preview
+        ctx.save();
+        ctx.translate(padding + slotW, y);
+        ctx.scale(-1, 1);
+        ctx.drawImage(s.el, 0, 0, slotW, slotH);
+        ctx.restore();
+        y += slotH + padding;
+      });
+
+      rafId = requestAnimationFrame(drawFrame);
+    }
+
+    recorder.start();
+    drawFrame();
+
+    await new Promise(res => setTimeout(res, exportDurationMs));
+
+    cancelAnimationFrame(rafId);
+    recorder.stop();
+
+    const blob = await recordingDone;
+
+    // clean up the off-screen video elements
+    sources.forEach(s => s.el.remove());
+
+    return blob;
+  }
+
+  function triggerDownload(href, filename) {
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  downloadBtn.addEventListener('click', async () => {
+    if (captures.length === 0) {
+      alert('Nothing in the strip yet — capture a photo or clip first.');
+      return;
+    }
+
+    const ordered = [...captures].sort((a, b) => a.index - b.index);
+    const photos = ordered.filter(c => c.type === 'photo');
+    const videos = ordered.filter(c => c.type === 'video');
+
+    downloadBtn.disabled = true;
+
+    try {
+      if (photos.length > 0) {
+        progressEl.textContent = 'saving photo strip…';
+        const stripDataUrl = await buildStripImage(photos);
+        triggerDownload(stripDataUrl, 'photobooth-strip.png');
+      }
+
+      if (videos.length > 0) {
+        progressEl.textContent = 'recording strip video…';
+        const blob = await exportStripVideo(videos);
+        const url = URL.createObjectURL(blob);
+        triggerDownload(url, 'photobooth-strip.webm');
+      }
+
+      progressEl.textContent = 'strip saved';
+    } catch (err) {
+      console.error(err);
+      progressEl.textContent = 'save failed — try again';
+    } finally {
+      downloadBtn.disabled = false;
+    }
+  });
+
+  renderEmptySlots();
+  initCamera();
+})();
+</script>
+
+</body>
+</html>
