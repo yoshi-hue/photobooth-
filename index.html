@@ -452,14 +452,29 @@
       if (!stream) return reject('no stream');
       let chunks = [];
       const mimeType = pickSupportedMimeType();
+      console.log('Recording with mimeType:', mimeType);
       try {
         mediaRecorder = new MediaRecorder(stream, { mimeType });
       } catch (e) {
+        console.warn('Falling back to default MediaRecorder mimeType:', e);
         mediaRecorder = new MediaRecorder(stream);
       }
-      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      mediaRecorder.ondataavailable = e => {
+        console.log('ondataavailable fired, chunk size:', e.data.size);
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      mediaRecorder.onerror = e => {
+        console.error('MediaRecorder error:', e);
+        reject(e);
+      };
       mediaRecorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: mimeType });
+        const totalSize = chunks.reduce((sum, c) => sum + c.size, 0);
+        console.log('Recording stopped. Total chunks:', chunks.length, 'Total size:', totalSize);
+        if (totalSize === 0) {
+          reject(new Error('Recorded clip is empty (0 bytes) — MediaRecorder produced no data.'));
+          return;
+        }
+        const blob = new Blob(chunks, { type: mediaRecorder.mimeType || mimeType });
         try {
           const dataUrl = await blobToDataUrl(blob);
           resolve({ url: dataUrl, blob });
@@ -467,8 +482,13 @@
           reject(err);
         }
       };
-      mediaRecorder.start();
-      setTimeout(() => mediaRecorder.stop(), durationMs);
+      // request data periodically (every 200ms) instead of only on stop —
+      // some browsers handle a timesliced recorder more reliably than
+      // waiting for a single dataavailable event at the very end
+      mediaRecorder.start(200);
+      setTimeout(() => {
+        if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+      }, durationMs);
     });
   }
 
@@ -481,13 +501,18 @@
       vid.playsInline = true;
       vid.setAttribute('muted', ''); // some mobile browsers need the attribute, not just the property
       vid.style.transform = 'scaleX(-1)'; // mirror to match the live preview
+      vid.addEventListener('error', () => {
+        const code = vid.error ? vid.error.code : 'unknown';
+        const codeNames = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+        console.error(`Live strip video failed (MediaError code ${code}: ${codeNames[code] || 'unknown'})`);
+      });
       vid.src = url;
       vid.load();
       // explicitly kick off playback once enough data is available —
       // relying on the autoplay attribute alone can silently fail to
       // paint a visible frame on some devices, leaving a black box.
       vid.addEventListener('loadeddata', () => {
-        vid.play().catch(() => {});
+        vid.play().catch(err => console.error('Live strip video play() failed:', err));
       });
       fillSlot(slotIndex, vid, 'video');
       captures.push({ index: slotIndex, type: 'video', url });
@@ -575,9 +600,16 @@
       vid.style.left = '-9999px'; // off-screen but still in the DOM
       document.body.appendChild(vid);
       vid.addEventListener('loadeddata', () => {
-        vid.play().then(() => resolve({ ...c, el: vid })).catch(reject);
+        vid.play().then(() => resolve({ ...c, el: vid })).catch(err => {
+          reject(new Error('Video play() failed: ' + (err && err.message ? err.message : err)));
+        });
       });
-      vid.addEventListener('error', reject);
+      vid.addEventListener('error', () => {
+        // MediaError codes: 1=ABORTED 2=NETWORK 3=DECODE 4=SRC_NOT_SUPPORTED
+        const code = vid.error ? vid.error.code : 'unknown';
+        const codeNames = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+        reject(new Error(`Video failed to load (MediaError code ${code}: ${codeNames[code] || 'unknown'})`));
+      });
       vid.src = c.url;
       vid.load();
     })));
@@ -688,7 +720,8 @@
       progressEl.textContent = 'strip saved';
     } catch (err) {
       console.error(err);
-      progressEl.textContent = 'save failed — try again';
+      const msg = err && err.message ? err.message : 'unknown error';
+      progressEl.textContent = `save failed — ${msg}`;
     } finally {
       downloadBtn.disabled = false;
     }
