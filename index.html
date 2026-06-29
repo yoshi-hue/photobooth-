@@ -241,6 +241,7 @@
     letter-spacing: 0.5px;
   }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/fix-webm-duration@1.0.6/fix-webm-duration.js"></script>
 </head>
 <body>
 
@@ -694,18 +695,36 @@
     // periodically (every 200ms) instead of relying on a single
     // dataavailable event at the very end avoids producing a malformed
     // / incomplete webm container on some browsers.
+    const recordStartTime = Date.now();
     recorder.start(200);
     rafId = requestAnimationFrame(drawFrame);
 
     await new Promise(res => setTimeout(res, exportDurationMs));
 
     cancelAnimationFrame(rafId);
+    const actualDurationMs = Date.now() - recordStartTime;
     if (recorder.state !== 'inactive') {
       recorder.requestData(); // flush any pending data before stopping
       recorder.stop();
     }
 
-    const blob = await recordingDone;
+    let blob = await recordingDone;
+
+    // Chrome's MediaRecorder (via canvas.captureStream specifically) is
+    // well-documented to produce webm files missing duration metadata in
+    // the header — this is what makes VLC, Windows Movies & TV, and even
+    // real ffmpeg-based converters reject the file outright with parse
+    // errors. ysFixWebmDuration patches that missing metadata section
+    // into the blob after the fact, fixing playback everywhere.
+    if (typeof ysFixWebmDuration === 'function') {
+      try {
+        blob = await ysFixWebmDuration(blob, actualDurationMs, { logger: false });
+      } catch (fixErr) {
+        console.error('ysFixWebmDuration failed, using unfixed blob:', fixErr);
+      }
+    } else {
+      console.warn('ysFixWebmDuration not loaded — webm duration metadata may be missing');
+    }
 
     // clean up the off-screen video elements
     sources.forEach(s => s.el.remove());
