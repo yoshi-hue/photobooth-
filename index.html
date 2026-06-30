@@ -595,7 +595,14 @@
 
   function buildPlaybackSources(videoCaptures) {
     // Build ready-to-play <video> sources for each clip — muted, looping,
-    // attached off-screen (but in the DOM) so autoplay reliably works.
+    // attached in the DOM so autoplay reliably works. IMPORTANT: positioned
+    // at -9999px (far off-screen) was the previous approach, but browsers
+    // can throttle/skip decoding video elements considered far outside the
+    // viewport, which silently starves canvas.drawImage() of real frames —
+    // exactly matching the "recorder produces 0 bytes" symptom. Using
+    // opacity + pointer-events instead keeps the element within the visible
+    // layout area (so it's never culled) while still being invisible to
+    // the person using the booth.
     return Promise.all(videoCaptures.map(c => new Promise((resolve, reject) => {
       const vid = document.createElement('video');
       vid.muted = true;
@@ -603,7 +610,13 @@
       vid.loop = true;
       vid.playsInline = true;
       vid.style.position = 'fixed';
-      vid.style.left = '-9999px'; // off-screen but still in the DOM
+      vid.style.top = '0';
+      vid.style.left = '0';
+      vid.style.width = '2px';
+      vid.style.height = '2px';
+      vid.style.opacity = '0.01';
+      vid.style.pointerEvents = 'none';
+      vid.style.zIndex = '-1';
       document.body.appendChild(vid);
       vid.addEventListener('loadeddata', () => {
         vid.play().then(() => resolve({ ...c, el: vid })).catch(err => {
@@ -633,6 +646,9 @@
     const canvas = document.createElement('canvas');
     canvas.width = totalW;
     canvas.height = totalH;
+    canvas.style.position = 'fixed';
+    canvas.style.left = '-9999px';
+    document.body.appendChild(canvas); // captureStream can fail to emit frames from a fully detached canvas
     const ctx = canvas.getContext('2d');
 
     // duration: longest clip in the strip
@@ -668,7 +684,10 @@
     ctx.fillStyle = '#fffdf7';
     ctx.fillRect(0, 0, totalW, totalH);
     let y0 = padding;
-    sources.forEach(s => {
+    sources.forEach((s, i) => {
+      // one-time diagnostic: confirms whether each source video actually
+      // has decoded frame data available right before we start recording
+      console.log(`Source ${i} readyState: ${s.el.readyState}, videoWidth: ${s.el.videoWidth}, paused: ${s.el.paused}, currentTime: ${s.el.currentTime}`);
       ctx.save();
       ctx.translate(padding + slotW, y0);
       ctx.scale(-1, 1);
@@ -678,17 +697,27 @@
     });
 
     const canvasStream = canvas.captureStream(30);
+    const track = canvasStream.getVideoTracks()[0];
+    console.log('[strip export] canvas track state:', track ? `readyState=${track.readyState}, muted=${track.muted}, enabled=${track.enabled}` : 'NO VIDEO TRACK FOUND');
     let recorder;
     try {
       recorder = new MediaRecorder(canvasStream, { mimeType: pickSupportedMimeType() });
     } catch (e) {
       recorder = new MediaRecorder(canvasStream);
     }
+    console.log('[strip export] Recording with mimeType:', recorder.mimeType);
     const chunks = [];
-    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    recorder.ondataavailable = e => {
+      console.log('[strip export] ondataavailable fired, chunk size:', e.data.size);
+      if (e.data.size > 0) chunks.push(e.data);
+    };
 
     const recordingDone = new Promise(resolve => {
-      recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'video/webm' }));
+      recorder.onstop = () => {
+        const totalSize = chunks.reduce((sum, c) => sum + c.size, 0);
+        console.log('[strip export] Recording stopped. Total chunks:', chunks.length, 'Total size:', totalSize);
+        resolve(new Blob(chunks, { type: recorder.mimeType || 'video/webm' }));
+      };
     });
 
     // same timeslicing fix as the single-clip recorder: requesting data
@@ -737,8 +766,9 @@
       console.warn('ysFixWebmDuration not loaded — webm duration metadata may be missing');
     }
 
-    // clean up the off-screen video elements
+    // clean up the off-screen video elements and canvas
     sources.forEach(s => s.el.remove());
+    canvas.remove();
 
     return blob;
   }
